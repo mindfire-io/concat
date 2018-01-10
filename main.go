@@ -1,21 +1,25 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"regexp"
-	"github.com/abiosoft/semaphore"
+	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"flag"
-	"runtime"
+
+	"github.com/abiosoft/semaphore"
 )
 
 const edgecastLinkBegin string = "http://"
@@ -33,12 +37,16 @@ const currentReleaseLink string = "https://github.com/ArneVogel/concat/releases/
 const currentReleaseStart string = `<a href="/ArneVogel/concat/releases/download/`
 const currentReleaseEnd string = `/concat"`
 const versionNumber string = "v0.2.1"
+
 var ffmpegCMD string = `ffmpeg`
 
 var debug bool
 var twitch_client_id string = "aokchnui2n8q38g0vezl9hq6htzy4c"
 
 var sem = semaphore.New(5)
+
+var tracking []string
+var trackingfilepath string
 
 /*
 	Returns the signature and token from a tokenAPILink
@@ -85,7 +93,7 @@ func accessUsherAPI(usherAPILink string) (map[string]string, error) {
 		fmt.Printf("\nUsher API response:\n%s\n", respString)
 	}
 
-	var re = regexp.MustCompile(qualityStart+"([^\"]+)"+qualityEnd+"\n([^\n]+)\n")
+	var re = regexp.MustCompile(qualityStart + "([^\"]+)" + qualityEnd + "\n([^\n]+)\n")
 	match := re.FindAllStringSubmatch(respString, -1)
 
 	edgecastURLmap := make(map[string]string)
@@ -127,31 +135,53 @@ func startingChunk(sh int, sm int, ss int, target int) int {
 	return (start_seconds / target)
 }
 
+//***********************************************************************************************************************************************************
 func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chunkName string, vodID string, wg *sync.WaitGroup) {
-	sem.Acquire()
+	//fmt.Println("Downchunk " + chunkNum)
+	var exists = false
 
-	if debug {
-		fmt.Printf("Downloading: %s\n", edgecastBaseURL + chunkName)
-	} else {
-		fmt.Print(".");
+	for i := range tracking {
+		if tracking[i] == vodID+"_"+chunkNum+chunkFileExtension {
+			exists = true
+			if debug {
+				fmt.Println("Found " + tracking[i])
+			} else {
+				fmt.Print("{" + chunkNum + "}")
+			}
+
+		}
 	}
 
-	resp, err := http.Get(edgecastBaseURL + chunkName)
-	if err != nil {
-		os.Exit(1)
+	//fmt.Println(ok)
+	if !exists {
+
+		sem.Acquire()
+
+		if debug {
+			fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
+		} else {
+			fmt.Print("(" + chunkNum + ")")
+		}
+
+		resp, err := http.Get(edgecastBaseURL + chunkName)
+		if err != nil {
+			os.Exit(1)
+		}
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			os.Exit(1)
+		}
+
+		_ = ioutil.WriteFile(newpath+"/"+vodID+"_"+chunkNum+chunkFileExtension, body, 0644)
+
+		tracking = append(tracking, vodID+"_"+chunkNum+chunkFileExtension)
+		writeLines(tracking, trackingfilepath)
+
+		defer wg.Done()
+		sem.Release()
 	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		os.Exit(1)
-	}
-
-	_ = ioutil.WriteFile(newpath + "/" + vodID+"_"+chunkNum+chunkFileExtension, body, 0644)
-
-	defer wg.Done()
-	sem.Release()
 }
-
 
 func ffmpegCombine(newpath string, chunkNum int, startChunk int, vodID string) {
 	concat := `concat:`
@@ -206,7 +236,6 @@ func printQualityOptions(vodIDString string) {
 
 	usherAPILink := fmt.Sprintf("http://usher.twitch.tv/vod/%v?nauthsig=%v&nauth=%v&allow_source=true", vodID, sig, token)
 
-
 	resp, err := http.Get(usherAPILink)
 	if err != nil {
 		return
@@ -248,9 +277,9 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		vodSH, _ = strconv.Atoi(startArray[0]) //start Hour
 		vodSM, _ = strconv.Atoi(startArray[1]) //start minute
 		vodSS, _ = strconv.Atoi(startArray[2]) //start second
-		vodEH, _ = strconv.Atoi(endArray[0]) //end hour
-		vodEM, _ = strconv.Atoi(endArray[1]) //end minute
-		vodES, _ = strconv.Atoi(endArray[2]) //end second
+		vodEH, _ = strconv.Atoi(endArray[0])   //end hour
+		vodEM, _ = strconv.Atoi(endArray[1])   //end minute
+		vodES, _ = strconv.Atoi(endArray[2])   //end second
 
 		if (vodSH*3600 + vodSM*60 + vodSS) > (vodEH*3600 + vodEM*60 + vodES) {
 			wrongInputNotification()
@@ -259,8 +288,8 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	_, err := os.Stat(vodIDString + ".mp4")
 
-	if ( err == nil || !os.IsNotExist(err)) {
-		fmt.Printf("Destination file %s already exists!\n", vodIDString + ".mp4")
+	if err == nil || !os.IsNotExist(err) {
+		fmt.Printf("Destination file %s already exists!\n", vodIDString+".mp4")
 		os.Exit(1)
 	}
 
@@ -333,7 +362,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 					fps_tmp = 0
 				}
 
-				if ( resolution_tmp > resolution_max || resolution_tmp == resolution_max && fps_tmp > fps_max ) {
+				if resolution_tmp > resolution_max || resolution_tmp == resolution_max && fps_tmp > fps_max {
 					quality = key
 					fps_max = fps_tmp
 					resolution_max = resolution_tmp
@@ -352,7 +381,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	}
 
 	edgecastBaseURL := m3u8Link
-	edgecastBaseURL = edgecastBaseURL[0 : strings.Index(edgecastBaseURL, edgecastLinkBaseEnd)]
+	edgecastBaseURL = edgecastBaseURL[0:strings.Index(edgecastBaseURL, edgecastLinkBaseEnd)]
 
 	if debug {
 		fmt.Printf("\nedgecastBaseURL: %s\nm3u8Link: %s\n", edgecastBaseURL, m3u8Link)
@@ -403,7 +432,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	var wg sync.WaitGroup
 	wg.Add(chunkNum)
 
-	newpath := filepath.Join(".", "_" + vodIDString)
+	newpath := filepath.Join(".", "_"+vodIDString)
 
 	err = os.MkdirAll(newpath, os.ModePerm)
 	if err != nil {
@@ -412,7 +441,32 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 	}
 	fmt.Printf("Created temp dir: %s\n", newpath)
 
+	trackingfilepath = newpath + "/tmp.txt"
+
+	//create the temp file
+	createFile(trackingfilepath)
+
+	fmt.Printf("Created temp file: %s/tmp.txt\n", newpath)
+
+	//create dummy data and write to file
+	//var a []string
+	//a = append(a, "Hello")
+	//a = append(a, "World")
+
+	//writeLines(a, trackingfilepath)
+
+	//read data from file
+	tracking, err = readLines(trackingfilepath)
+	if err != nil {
+		log.Fatalf("readLines: %s", err)
+	}
+	for i, line := range tracking {
+		fmt.Println(i, line)
+	}
+
 	fmt.Println("Starting Download")
+
+	//add something here. probably create a file in the temp directory and store files that have been completed then skip completed vods ***********************************
 
 	for i := startChunk; i < (startChunk + chunkNum); i++ {
 
@@ -432,6 +486,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	fmt.Println("Deleting temp dir")
 
+	os.Remove(trackingfilepath)
 	os.Remove(newpath)
 
 	fmt.Println("All done!")
@@ -454,7 +509,7 @@ func rightVersion() bool {
 
 func init() {
 	if runtime.GOOS == "windows" {
-	    ffmpegCMD = `ffmpeg.exe`
+		ffmpegCMD = `ffmpeg.exe`
 	}
 }
 
@@ -472,10 +527,10 @@ func main() {
 
 	flag.Parse()
 
-	debug = *debugFlag;
+	debug = *debugFlag
 
 	if !rightVersion() {
-		fmt.Printf("\nYou are using an old version of concat. Check out %s for the most recent version.\n\n",currentReleaseLink)
+		fmt.Printf("\nYou are using an old version of concat. Check out %s for the most recent version.\n\n", currentReleaseLink)
 	}
 
 	if *vodID == standardVOD {
@@ -488,11 +543,137 @@ func main() {
 		os.Exit(1)
 	}
 
-	if (*start != standardStartAndEnd && *end != standardStartAndEnd) {
-		downloadPartVOD(*vodID, *start, *end, *quality);
+	if *start != standardStartAndEnd && *end != standardStartAndEnd {
+		downloadPartVOD(*vodID, *start, *end, *quality)
 	} else {
-		downloadPartVOD(*vodID, "0", "full", *quality);
+		downloadPartVOD(*vodID, "0", "full", *quality)
 	}
 
 	os.Exit(1)
+}
+
+//https://gist.github.com/novalagung/13c5c8f4d30e0c4bff27
+
+func createFile(path string) {
+	// detect if file exists
+	var _, err = os.Stat(path)
+
+	// create file if not exists
+	if os.IsNotExist(err) {
+		var file, err = os.Create(path)
+		if isError(err) {
+			return
+		}
+		defer file.Close()
+	}
+
+	fmt.Println("==> done creating file", path)
+}
+
+func writeFile(path string, data string) {
+	// open file using READ & WRITE permission
+	var file, err = os.OpenFile(path, os.O_RDWR, 0644)
+	if isError(err) {
+		return
+	}
+	defer file.Close()
+
+	// write some text line-by-line to file
+	_, err = file.WriteString(data)
+	if isError(err) {
+		return
+	}
+	_, err = file.WriteString("mari belajar golang\n")
+	if isError(err) {
+		return
+	}
+
+	// save changes
+	err = file.Sync()
+	if isError(err) {
+		return
+	}
+
+	fmt.Println("==> done writing to file")
+}
+
+func readFile(path string) {
+	// re-open file
+	var file, err = os.OpenFile(path, os.O_RDWR, 0644)
+	if isError(err) {
+		return
+	}
+	defer file.Close()
+
+	// read file, line by line
+	var text = make([]byte, 1024)
+	for {
+		_, err = file.Read(text)
+
+		// break if finally arrived at end of file
+		if err == io.EOF {
+			break
+		}
+
+		// break if error occured
+		if err != nil && err != io.EOF {
+			isError(err)
+			break
+		}
+	}
+
+	fmt.Println("==> done reading from file")
+	fmt.Println(string(text))
+}
+
+func deleteFile(path string) {
+	// delete file
+	var err = os.Remove(path)
+	if isError(err) {
+		return
+	}
+
+	fmt.Println("==> done deleting file")
+}
+
+func isError(err error) bool {
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+
+	return (err != nil)
+}
+
+//https://stackoverflow.com/questions/5884154/read-text-file-into-string-array-and-write
+
+// readLines reads a whole file into memory
+// and returns a slice of its lines.
+func readLines(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	return lines, scanner.Err()
+}
+
+// writeLines writes the lines to the given file.
+func writeLines(lines []string, path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	w := bufio.NewWriter(file)
+	for _, line := range lines {
+		fmt.Fprintln(w, line)
+	}
+	return w.Flush()
 }
