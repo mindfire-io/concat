@@ -1,4 +1,6 @@
 # concat
+*This is a modified version of the repo by ArneVogel that adds support for resuming downloads if they fail by saving the list of completed .ts files in a txt file. 
+
 ## Download
 Go to [releases](https://github.com/ArneVogel/concat/releases) for the current build. Download concat.exe if you are on windows and concat if want to use it on ubuntu.
 
