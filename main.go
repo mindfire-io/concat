@@ -178,9 +178,10 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		tracking = append(tracking, vodID+"_"+chunkNum+chunkFileExtension)
 		writeLines(tracking, trackingfilepath)
 
-		defer wg.Done()
 		sem.Release()
 	}
+	defer wg.Done()
+		
 }
 
 func ffmpegCombine(newpath string, chunkNum int, startChunk int, vodID string) {

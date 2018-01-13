@@ -5,3 +5,5 @@ bin/
 src/
 .DS_Store
 concat
+*.ts
+*.txt
