@@ -45,6 +45,7 @@ var twitch_client_id string = "aokchnui2n8q38g0vezl9hq6htzy4c"
 
 var sem = semaphore.New(5)
 
+var numchunks int
 var tracking []string
 var trackingfilepath string
 
@@ -144,9 +145,9 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		if tracking[i] == vodID+"_"+chunkNum+chunkFileExtension {
 			exists = true
 			if debug {
-				fmt.Println("Found " + tracking[i])
+				fmt.Println("Found Chunk: " + chunkNum + ", " + strconv.Itoa(numchunks) + " Remain")
 			} else {
-				fmt.Print("{" + chunkNum + "}")
+				fmt.Println("{" + chunkNum + " | " + strconv.Itoa(numchunks) + "}")
 			}
 
 		}
@@ -158,9 +159,10 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 		sem.Acquire()
 
 		if debug {
-			fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
+			//fmt.Printf("Downloading: %s\n", edgecastBaseURL+chunkName)
+			fmt.Println("Downloading Chunk: " + chunkNum + ", " + strconv.Itoa(numchunks) + " Remain")
 		} else {
-			fmt.Print("(" + chunkNum + ")")
+			fmt.Println("(" + chunkNum + " | " + strconv.Itoa(numchunks) + ")")
 		}
 
 		resp, err := http.Get(edgecastBaseURL + chunkName)
@@ -180,8 +182,9 @@ func downloadChunk(newpath string, edgecastBaseURL string, chunkNum string, chun
 
 		sem.Release()
 	}
+	numchunks = numchunks - 1
 	defer wg.Done()
-		
+
 }
 
 func ffmpegCombine(newpath string, chunkNum int, startChunk int, vodID string) {
@@ -423,6 +426,7 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 		fmt.Println("Dowbloading full vod")
 
 		chunkNum = len(m3u8Array)
+		numchunks = chunkNum
 		startChunk = 0
 	}
 
@@ -481,14 +485,14 @@ func downloadPartVOD(vodIDString string, start string, end string, quality strin
 
 	ffmpegCombine(newpath, chunkNum, startChunk, vodIDString)
 
-	fmt.Println("Deleting chunks")
+	fmt.Println("Not Deleting chunks")
 
-	deleteChunks(newpath, chunkNum, startChunk, vodIDString)
+	//deleteChunks(newpath, chunkNum, startChunk, vodIDString)
 
-	fmt.Println("Deleting temp dir")
+	fmt.Println("Not Deleting temp dir")
 
-	os.Remove(trackingfilepath)
-	os.Remove(newpath)
+	//os.Remove(trackingfilepath)
+	//os.Remove(newpath)
 
 	fmt.Println("All done!")
 }
